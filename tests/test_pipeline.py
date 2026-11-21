@@ -204,7 +204,7 @@ def test_collect_once_with_mock_api(tmp_path):
     p = a.price(cn, 111, 249274)
     assert p["min_price"] == "17s 38c" and p["data_from"].startswith("2026-11-20T12:00")
     st = a.status(cn)
-    assert {r["kind"] for r in st["runs"]} == {"auctions", "commodities"}
+    assert {r["kind"] for r in st["runs"]} == {"auctions", "commodities"} and st["collected_houses"] == [111]
 
 
 # --- MCP-verktygen via FastMCP ---

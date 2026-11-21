@@ -47,8 +47,11 @@ def resolve_house(conn: sqlite3.Connection, house: str | int | None, default: st
     if key.isdigit():
         row = conn.execute("SELECT house_id, name FROM houses WHERE house_id=?", (int(key),)).fetchone()
     else:
+        # Flera hus har samma namn (ett per ruleset); välj bland dem som faktiskt samlas in
         row = conn.execute(
-            "SELECT house_id, name FROM houses WHERE key LIKE ? ORDER BY length(key) LIMIT 1", (f"%{key}%",)
+            "SELECT h.house_id, h.name FROM houses h WHERE h.key LIKE ? "
+            "ORDER BY EXISTS(SELECT 1 FROM runs r WHERE r.house_id=h.house_id) DESC, h.house_id LIMIT 1",
+            (f"%{key}%",),
         ).fetchone()
     if not row:
         raise NotFound(f"Okänt auktionshus: {key}")
@@ -301,13 +304,15 @@ def movers(conn: sqlite3.Connection, house_id: int, hours: int = 24, min_daily_t
 
 def status(conn: sqlite3.Connection) -> dict[str, Any]:
     runs = [dict(r) for r in conn.execute(
-        "SELECT h.name AS house, r.kind, r.data_ts, r.fetched_at, r.n_listings FROM runs r "
+        "SELECT r.house_id, h.name AS house, r.kind, r.data_ts, r.fetched_at AS last_checked, r.n_listings FROM runs r "
         "JOIN houses h ON h.house_id=r.house_id ORDER BY h.name, r.kind")]
     for r in runs:
         r["data_ts"] = _iso(r["data_ts"])
-        r["fetched_at"] = _iso(r["fetched_at"])
+        r["last_checked"] = _iso(r["last_checked"])
     counts = conn.execute(
         "SELECT (SELECT count(*) FROM items WHERE name IS NOT NULL), (SELECT count(*) FROM snapshots), "
         "(SELECT count(*) FROM daily), (SELECT min(day) FROM daily)").fetchone()
     return {"runs": runs, "named_items": counts[0], "hourly_rows": counts[1], "daily_rows": counts[2],
-            "history_since": counts[3], "houses": [dict(r) for r in conn.execute("SELECT * FROM houses")]}
+            "history_since": counts[3],
+            "collected_houses": sorted({r["house_id"] for r in runs}),
+            "note": "Husnamn är inte unika (ett hus per ruleset och fraktion). Ange hus-id för exakthet."}

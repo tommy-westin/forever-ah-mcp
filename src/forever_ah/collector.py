@@ -283,6 +283,10 @@ async def collect_once(client: BlizzardClient, conn: sqlite3.Connection, s: Sett
             fetch = client.house_commodities if kind == "commodities" else client.house_auctions
             res = await fetch(ruleset_id, house_id, ims)
             if res.status == 304:
+                # Spara att vi frågat, så att status visar att insamlaren lever
+                with conn:
+                    conn.execute("UPDATE runs SET fetched_at=? WHERE house_id=? AND kind=?",
+                                 (int(time.time()), house_id, kind))
                 log.debug("Hus %s/%s oförändrat", house_id, kind)
                 continue
             if res.status != 200 or res.data is None:
