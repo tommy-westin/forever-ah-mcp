@@ -41,6 +41,17 @@ Priser lagras i koppar per styck. Auktioner med bara bud (utan buyout) ignoreras
 
 Rekommenderat på en liten värd. Två systemd-tjänster med härdning, hemligheter i `/etc/forever-ah/*.env` (läsbara bara för root och tjänstekontot).
 
+Containern måste ha **nesting** påslaget, annars kan systemd inte sätta upp tjänsternas sandlåda (`status=226/NAMESPACE`):
+
+```bash
+pct create <ID> local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst \
+  --hostname forever-ah --cores 1 --memory 1024 --swap 512 --rootfs local-lvm:8 \
+  --net0 name=eth0,bridge=vmbr0,ip=dhcp --unprivileged 1 --features nesting=1 --onboot 1 --start 1
+# befintlig container: pct set <ID> --features nesting=1 && pct reboot <ID>
+```
+
+I containern:
+
 ```bash
 git clone https://github.com/tommy-westin/forever-ah-mcp /opt/src/forever-ah-mcp
 cd /opt/src/forever-ah-mcp && bash deploy/install-lxc.sh
