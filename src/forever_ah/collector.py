@@ -209,19 +209,23 @@ def rollup(conn: sqlite3.Connection, retention_days: int, now: int | None = None
 async def resolve_houses(client: BlizzardClient, conn: sqlite3.Connection, s: Settings) -> tuple[int, list[int]]:
     ruleset_id = s.ruleset_id or (await client.ruleset_ids())[0]
     index = await client.auction_houses(ruleset_id)
-    chosen: list[int] = []
+    chosen: list[tuple[int, str]] = []
     with conn:
         for h in index:
-            name = str(h.get("name") or h.get("key", {}).get("href", ""))
+            hid = int(h["id"])
+            name = str(h.get("name") or hid)
             key = name.strip().lower()
-            conn.execute("INSERT OR REPLACE INTO houses VALUES (?,?,?)", (int(h["id"]), name, key))
-            if any(wanted in key for wanted in s.houses):
-                chosen.append(int(h["id"]))
+            conn.execute("INSERT OR REPLACE INTO houses VALUES (?,?,?)", (hid, name, key))
+            for wanted in s.houses:
+                # Siffra = hus-id, annars exakt namn eller delsträng
+                if (wanted.isdigit() and int(wanted) == hid) or (not wanted.isdigit() and wanted in key):
+                    chosen.append((hid, name))
+                    break
+    log.info("Tillgängliga hus: %s", ", ".join(f"{h['id']}={h.get('name')}" for h in index))
     if not chosen:
-        names = ", ".join(str(h.get("name")) for h in index)
-        raise BlizzardError(f"Inget hus matchar AH_HOUSES={','.join(s.houses)}. Tillgängliga: {names}")
-    log.info("Ruleset %s, hus %s", ruleset_id, chosen)
-    return ruleset_id, chosen
+        raise BlizzardError(f"Inget hus matchar AH_HOUSES={','.join(s.houses)}")
+    log.info("Ruleset %s, samlar in: %s", ruleset_id, ", ".join(f"{i} ({n})" for i, n in chosen))
+    return ruleset_id, [i for i, _ in chosen]
 
 
 async def fetch_item_names(client: BlizzardClient, conn: sqlite3.Connection, limit: int) -> int:
@@ -237,7 +241,7 @@ async def fetch_item_names(client: BlizzardClient, conn: sqlite3.Connection, lim
     ]
     if not missing:
         return 0
-    sem = asyncio.Semaphore(10)
+    sem = asyncio.Semaphore(4)
 
     async def one(item_id: int):
         async with sem:

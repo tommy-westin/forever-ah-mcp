@@ -47,15 +47,27 @@ class FetchResult:
 
 
 class BlizzardClient:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
+    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None, rate_per_s: float = 20.0):
         self.s = settings
         self._client = client or httpx.AsyncClient(timeout=settings.http_timeout_s)
         self._token: str | None = None
         self._token_exp = 0.0
         self._token_lock = asyncio.Lock()
+        # Blizzard tillåter 100 anrop/s men stryper korta skurar; håll jämn takt
+        self._min_interval = 1.0 / max(1.0, rate_per_s)
+        self._rate_lock = asyncio.Lock()
+        self._next_slot = 0.0
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    async def _throttle(self) -> None:
+        async with self._rate_lock:
+            now = time.monotonic()
+            wait = self._next_slot - now
+            self._next_slot = max(now, self._next_slot) + self._min_interval
+        if wait > 0:
+            await asyncio.sleep(wait)
 
     async def _get_token(self, force: bool = False) -> str:
         async with self._token_lock:
@@ -90,6 +102,7 @@ class BlizzardClient:
             headers = {"Authorization": f"Bearer {token}"}
             if if_modified_since:
                 headers["If-Modified-Since"] = if_modified_since
+            await self._throttle()
             try:
                 r = await self._client.get(url, params=q, headers=headers)
             except httpx.TransportError as exc:
@@ -108,7 +121,8 @@ class BlizzardClient:
                 continue
             if r.status_code in (429, 500, 502, 503, 504) and attempt < retries:
                 wait = float(r.headers.get("Retry-After", backoff))
-                log.warning("HTTP %s från %s, försöker igen om %.0fs", r.status_code, path, wait)
+                (log.debug if r.status_code == 429 else log.warning)(
+                    "HTTP %s från %s, försöker igen om %.0fs", r.status_code, path, wait)
                 await asyncio.sleep(wait)
                 backoff *= 2
                 continue

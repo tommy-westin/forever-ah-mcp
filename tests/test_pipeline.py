@@ -235,3 +235,26 @@ def test_mcp_tools(conn, tmp_path, monkeypatch):
     res = asyncio.run(bad())
     blocks = res[0] if isinstance(res, tuple) else res
     assert "error" in json.loads(blocks[0].text)
+
+
+def test_resolve_houses_by_id(tmp_path):
+    from dataclasses import replace
+
+    s = replace(settings(tmp_path), houses=("112",))
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.host == "oauth.battle.net":
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        if req.url.path == "/data/wow/ruleset/index":
+            return httpx.Response(200, json={"rulesets": [{"id": 1}]})
+        return httpx.Response(200, json={"auctions": [{"id": 111, "name": "Normal Horde"},
+                                                     {"id": 112, "name": "PvP Horde"}]})
+
+    async def go():
+        client = BlizzardClient(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        try:
+            return await c.resolve_houses(client, db.connect(s.db_path), s)
+        finally:
+            await client.aclose()
+
+    assert asyncio.run(go()) == (1, [112])
