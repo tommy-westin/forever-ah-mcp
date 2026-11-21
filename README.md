@@ -37,7 +37,21 @@ Priser lagras i koppar per styck. Auktioner med bara bud (utan buyout) ignoreras
 
 `item` kan vara id eller engelskt namn. `house` är `horde`, `alliance` eller `blackwater`.
 
-## Installation på Proxmox (Docker)
+## Installation i Proxmox-LXC (utan Docker)
+
+Rekommenderat på en liten värd. Två systemd-tjänster med härdning, hemligheter i `/etc/forever-ah/*.env` (läsbara bara för root och tjänstekontot).
+
+```bash
+git clone https://github.com/tommy-westin/forever-ah-mcp /opt/src/forever-ah-mcp
+cd /opt/src/forever-ah-mcp && bash deploy/install-lxc.sh
+nano /etc/forever-ah/collector.env        # fyll i BLIZZARD_CLIENT_ID och _SECRET
+systemctl start forever-ah-collector forever-ah-mcp
+journalctl -u forever-ah-collector -f
+```
+
+Uppdatera: `git pull && bash deploy/install-lxc.sh`. Env-filer och data behålls.
+
+## Installation med Docker
 
 1. Skapa en API-klient på <https://develop.battle.net/access/clients> (gratis, client credentials räcker).
 2. Klona repot och skapa `.env`:

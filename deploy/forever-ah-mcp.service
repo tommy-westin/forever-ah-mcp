@@ -1,0 +1,27 @@
+[Unit]
+Description=WoW Forever AH MCP server (HTTP)
+After=network-online.target forever-ah-collector.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=forever-ah
+Group=forever-ah
+# Ingen tillgång till Blizzard-nycklarna, bara MCP-token
+EnvironmentFile=/etc/forever-ah/mcp.env
+ExecStart=/opt/forever-ah/venv/bin/forever-ah-mcp --http
+Restart=on-failure
+RestartSec=10
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# SQLite i WAL-läge behöver skriva -shm även för läsare
+ReadWritePaths=/var/lib/forever-ah
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
