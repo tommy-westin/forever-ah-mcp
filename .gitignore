@@ -1,0 +1,9 @@
+.env
+*.sqlite
+*.sqlite-*
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+certs/*
+!certs/.gitkeep

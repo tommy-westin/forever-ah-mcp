@@ -1,0 +1,28 @@
+services:
+  collector:
+    build: .
+    image: forever-ah-mcp:latest
+    command: ["forever-ah-collector"]
+    env_file: .env
+    volumes:
+      - ah-data:/data
+    restart: unless-stopped
+
+  mcp:
+    image: forever-ah-mcp:latest
+    command: ["forever-ah-mcp", "--http"]
+    env_file: .env
+    environment:
+      # MCP-servern behöver inte API-nycklarna, bara databasen
+      BLIZZARD_CLIENT_ID: ""
+      BLIZZARD_CLIENT_SECRET: ""
+    volumes:
+      - ah-data:/data
+    ports:
+      - "8765:8765"
+    depends_on:
+      - collector
+    restart: unless-stopped
+
+volumes:
+  ah-data:

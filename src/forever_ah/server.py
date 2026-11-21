@@ -1,0 +1,176 @@
+"""MCP-server som exponerar den insamlade auktionsdatan.
+
+Transporter:
+    forever-ah-mcp                      stdio (Claude Desktop, Claude Code lokalt)
+    forever-ah-mcp --http               streamable HTTP på MCP_HOST:MCP_PORT/mcp
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import functools
+import hmac
+import logging
+import os
+import sqlite3
+from typing import Any, Iterator
+
+from mcp.server.fastmcp import FastMCP
+
+from . import analytics as a
+from . import db
+from .config import load_settings
+
+log = logging.getLogger("forever_ah.server")
+S = load_settings(require_api=False)
+
+mcp = FastMCP(
+    "forever-ah",
+    instructions=(
+        "Auktionsdata för WoW Forever, insamlad varje timme från Blizzards API för ett eller flera auktionshus. "
+        "Priser är per styck. Items anges med id eller namn (engelska). 'house' är t.ex. 'horde', 'alliance' "
+        "eller 'blackwater'; utelämnat används standardhuset. Sålda mängder är uppskattningar från "
+        "försvunna listningar och kan innehålla avbrutna auktioner."
+    ),
+    host=S.mcp_host,
+    port=S.mcp_port,
+)
+
+
+@contextlib.contextmanager
+def _conn() -> Iterator[sqlite3.Connection]:
+    if not os.path.exists(S.db_path):
+        raise a.NotFound(f"Databasen {S.db_path} finns inte. Har insamlaren körts?")
+    conn = db.connect(S.db_path, readonly=True)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _ctx(conn: sqlite3.Connection, item: str | int | None, house: str | None) -> dict[str, Any]:
+    house_id, house_name = a.resolve_house(conn, house, S.default_house)
+    out: dict[str, Any] = {"house": house_name, "house_id": house_id}
+    if item is not None:
+        item_id, name = a.resolve_item(conn, item)
+        out.update(item_id=item_id, item=name)
+    return out
+
+
+def _safe(fn):
+    """Gör uppslagsfel till läsbara svar i stället för undantag."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except a.NotFound as exc:
+            return {"error": str(exc)}
+    return wrapper
+
+
+@mcp.tool()
+@_safe
+def ah_price(item: str, house: str | None = None) -> dict[str, Any]:
+    """Aktuellt pris för ett item: lägsta, 10:e percentil, median, mängd ute, förändring 24 h och 7 dygn,
+    samt uppskattat sålt senaste dygnet."""
+    with _conn() as c:
+        ctx = _ctx(c, item, house)
+        return {**ctx, **a.price(c, ctx["house_id"], ctx["item_id"])}
+
+
+@mcp.tool()
+@_safe
+def ah_history(item: str, days: int = 7, house: str | None = None) -> dict[str, Any]:
+    """Prishistorik. Upp till lagringstiden för timdata (standard 14 dygn) ges per timme, längre per dygn.
+    Priser i koppar."""
+    with _conn() as c:
+        ctx = _ctx(c, item, house)
+        return {**ctx, **a.history(c, ctx["house_id"], ctx["item_id"], days, S.hourly_retention_days)}
+
+
+@mcp.tool()
+@_safe
+def ah_signals(item: str, house: str | None = None) -> dict[str, Any]:
+    """Bottentecken för ett item som fallit i pris: (1) priset har slutat falla, (2) mängden ute minskar,
+    (3) försäljningen ökar. Ger poäng 0-3 med underlag."""
+    with _conn() as c:
+        ctx = _ctx(c, item, house)
+        return {**ctx, **a.signals(c, ctx["house_id"], ctx["item_id"])}
+
+
+@mcp.tool()
+@_safe
+def ah_depth(item: str, house: str | None = None) -> dict[str, Any]:
+    """Orderbok för ett item just nu: mängd per prisband över lägsta pris, de billigaste listningarna,
+    vad det kostar att köpa upp den billigaste fjärdedelen och hur stor den största enskilda listningen är."""
+    with _conn() as c:
+        ctx = _ctx(c, item, house)
+        return {**ctx, **a.depth(c, ctx["house_id"], ctx["item_id"])}
+
+
+@mcp.tool()
+@_safe
+def ah_movers(hours: int = 24, min_daily_turnover_gold: float = 5.0, house: str | None = None) -> dict[str, Any]:
+    """Största prisrörelserna under perioden bland items med minst angiven daglig omsättning (uppskattad)."""
+    with _conn() as c:
+        ctx = _ctx(c, None, house)
+        return {**ctx, **a.movers(c, ctx["house_id"], max(1, min(hours, 24 * 14)),
+                                  int(min_daily_turnover_gold * 10000))}
+
+
+@mcp.tool()
+@_safe
+def ah_search_items(text: str, limit: int = 20) -> dict[str, Any]:
+    """Sök item-id på namn (engelska, delsträng)."""
+    with _conn() as c:
+        return {"results": a.search_items(c, text, max(1, min(limit, 100)))}
+
+
+@mcp.tool()
+@_safe
+def ah_status() -> dict[str, Any]:
+    """Insamlingens status: senaste data per hus, antal rader och hur långt bak historiken går."""
+    with _conn() as c:
+        return a.status(c)
+
+
+class BearerAuth:
+    """Enkel ASGI-middleware: kräver 'Authorization: Bearer <MCP_TOKEN>' när token är satt."""
+
+    def __init__(self, app, token: str):
+        self.app = app
+        self.token = token.encode()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers") or [])
+            got = headers.get(b"authorization", b"")
+            if not hmac.compare_digest(got, b"Bearer " + self.token):
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [(b"content-type", b"text/plain"), (b"www-authenticate", b"Bearer")]})
+                await send({"type": "http.response.body", "body": b"Unauthorized"})
+                return
+        await self.app(scope, receive, send)
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="MCP-server för WoW Forever-auktionsdata")
+    p.add_argument("--http", action="store_true", help="Kör streamable HTTP i stället för stdio")
+    args = p.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if not args.http:
+        mcp.run("stdio")
+        return
+    import uvicorn
+
+    app = mcp.streamable_http_app()
+    if S.mcp_token:
+        app = BearerAuth(app, S.mcp_token)
+    else:
+        log.warning("MCP_TOKEN är inte satt: HTTP-servern är öppen för alla som når porten.")
+    uvicorn.run(app, host=S.mcp_host, port=S.mcp_port, log_level="info")
+
+
+if __name__ == "__main__":
+    main()
