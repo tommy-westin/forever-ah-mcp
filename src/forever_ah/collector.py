@@ -320,6 +320,8 @@ def main() -> None:
     p.add_argument("--log-level", default="INFO")
     args = p.parse_args()
     logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # httpx loggar varje anrop på INFO, vilket blir hundratals rader per körning
+    logging.getLogger("httpx").setLevel(logging.DEBUG if args.log_level.upper() == "DEBUG" else logging.WARNING)
     asyncio.run(run(args.once))
 
 
