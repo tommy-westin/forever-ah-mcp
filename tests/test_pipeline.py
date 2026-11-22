@@ -288,3 +288,33 @@ def test_migration_adds_columns(tmp_path):
     cols = {r[1] for r in cn.execute("PRAGMA table_info(items)")}
     assert {"class_id", "subclass_id", "required_level"} <= cols
     assert cn.execute("SELECT name FROM items WHERE item_id=1").fetchone()[0] == "Old"
+
+
+def test_item_fetch_transient_vs_notfound(tmp_path):
+    s = settings(tmp_path)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.host == "oauth.battle.net":
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        iid = int(req.url.path.rsplit("/", 1)[1])
+        if iid == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        if iid == 2:
+            return httpx.Response(404)
+        return httpx.Response(200, json={"name": "Ok", "item_class": {"name": "Trade Goods", "id": 7}})
+
+    cn = db.connect(s.db_path)
+    with cn:
+        for iid in (1, 2, 3):
+            cn.execute("INSERT INTO listings VALUES (1,?, 'commodities', ?, 1, 10, 'LONG')", (iid, iid))
+
+    async def go():
+        client = BlizzardClient(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)), rate_per_s=1000)
+        try:
+            return await c.fetch_item_names(client, cn, 100)
+        finally:
+            await client.aclose()
+
+    assert asyncio.run(go()) == 1
+    rows = dict(cn.execute("SELECT item_id, fetch_failed FROM items").fetchall())
+    assert rows == {2: 1, 3: 0}  # 429 lämnas orört och försöks igen nästa körning

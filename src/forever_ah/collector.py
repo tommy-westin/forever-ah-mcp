@@ -243,20 +243,26 @@ async def fetch_item_names(client: BlizzardClient, conn: sqlite3.Connection, lim
     if not missing:
         return 0
     sem = asyncio.Semaphore(4)
+    TRANSIENT = object()  # tillfälligt fel (429, 5xx, nätverk): räknas inte som misslyckat försök
 
     async def one(item_id: int):
         async with sem:
             try:
-                return item_id, await client.item(item_id)
+                return item_id, await client.item(item_id)  # None betyder 404, itemet finns inte i API:t
             except BlizzardError as exc:
                 log.debug("Item %s: %s", item_id, exc)
-                return item_id, None
+                return item_id, TRANSIENT
 
     results = await asyncio.gather(*(one(i) for i in missing))
     now = int(time.time())
+    ok = notfound = transient = 0
     with conn:
         for item_id, d in results:
+            if d is TRANSIENT:
+                transient += 1
+                continue
             if d:
+                ok += 1
                 name = d.get("name")
                 cls = d.get("item_class") or {}
                 sub = d.get("item_subclass") or {}
@@ -270,12 +276,15 @@ async def fetch_item_names(client: BlizzardClient, conn: sqlite3.Connection, lim
                      cls.get("id"), sub.get("id"), d.get("required_level") or 0),
                 )
             else:
+                notfound += 1
                 conn.execute(
                     """INSERT INTO items(item_id, fetched_at, fetch_failed) VALUES (?,?,1)
                        ON CONFLICT(item_id) DO UPDATE SET fetch_failed = fetch_failed + 1, fetched_at = excluded.fetched_at""",
                     (item_id, now),
                 )
-    return sum(1 for _, d in results if d)
+    if notfound or transient:
+        log.info("Itemdata: %d hämtade, %d finns inte i API:t (404), %d tillfälliga fel", ok, notfound, transient)
+    return ok
 
 
 async def collect_once(client: BlizzardClient, conn: sqlite3.Connection, s: Settings,
