@@ -27,7 +27,7 @@ class Settings:
     db_path: str = "/data/ah.sqlite"
     poll_minutes: int = 20
     hourly_retention_days: int = 14
-    item_fetch_per_run: int = 300
+    item_fetch_per_run: int = 1000
     http_timeout_s: float = 120.0
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 8765
@@ -60,7 +60,7 @@ def load_settings(require_api: bool = True) -> Settings:
         db_path=_env("AH_DB_PATH", "/data/ah.sqlite"),
         poll_minutes=int(_env("AH_POLL_MINUTES", "20")),
         hourly_retention_days=int(_env("AH_HOURLY_RETENTION_DAYS", "14")),
-        item_fetch_per_run=int(_env("AH_ITEM_FETCH_PER_RUN", "300")),
+        item_fetch_per_run=int(_env("AH_ITEM_FETCH_PER_RUN", "1000")),
         http_timeout_s=float(_env("AH_HTTP_TIMEOUT_S", "120")),
         mcp_host=_env("MCP_HOST", "0.0.0.0"),
         mcp_port=int(_env("MCP_PORT", "8765")),

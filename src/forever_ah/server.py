@@ -111,12 +111,36 @@ def ah_depth(item: str, house: str | None = None) -> dict[str, Any]:
 
 @mcp.tool()
 @_safe
-def ah_movers(hours: int = 24, min_daily_turnover_gold: float = 5.0, house: str | None = None) -> dict[str, Any]:
-    """Största prisrörelserna under perioden bland items med minst angiven daglig omsättning (uppskattad)."""
+def ah_movers(hours: int = 24, min_daily_turnover_gold: float = 5.0, item_class: str | None = None,
+              item_subclass: str | None = None, house: str | None = None) -> dict[str, Any]:
+    """Största prisrörelserna under perioden bland items med minst angiven daglig omsättning (uppskattad).
+    Kan filtreras på kategori, t.ex. item_class='Tradeskill', item_subclass='Herb'."""
     with _conn() as c:
         ctx = _ctx(c, None, house)
         return {**ctx, **a.movers(c, ctx["house_id"], max(1, min(hours, 24 * 14)),
-                                  int(min_daily_turnover_gold * 10000))}
+                                  int(min_daily_turnover_gold * 10000),
+                                  item_class=item_class, item_subclass=item_subclass)}
+
+
+@mcp.tool()
+@_safe
+def ah_categories(house: str | None = None) -> dict[str, Any]:
+    """Alla kategorier (klass och subklass enligt Blizzard) som finns ute på AH, med antal items och mängd."""
+    with _conn() as c:
+        ctx = _ctx(c, None, house)
+        return {**ctx, **a.categories(c, ctx["house_id"])}
+
+
+@mcp.tool()
+@_safe
+def ah_category(item_class: str | None = None, item_subclass: str | None = None, min_item_level: int | None = None,
+                max_item_level: int | None = None, limit: int = 30, house: str | None = None) -> dict[str, Any]:
+    """Items i en kategori med pris, mängd och uppskattat sålt senaste dygnet, sorterade på omsättning.
+    Klass/subklass matchas som delsträng (se ah_categories). Itemnivå avgränsar t.ex. nivåband."""
+    with _conn() as c:
+        ctx = _ctx(c, None, house)
+        return {**ctx, **a.category_items(c, ctx["house_id"], item_class, item_subclass, min_item_level,
+                                          max_item_level, max(1, min(limit, 200)))}
 
 
 @mcp.tool()

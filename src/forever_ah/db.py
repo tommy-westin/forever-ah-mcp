@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS items (
     item_class    TEXT,
     item_subclass TEXT,
     item_level    INTEGER,
+    class_id      INTEGER,
+    subclass_id   INTEGER,
+    required_level INTEGER,
     vendor_sell   INTEGER,
     fetched_at    INTEGER,
     fetch_failed  INTEGER NOT NULL DEFAULT 0
@@ -85,13 +88,31 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 
+MIGRATIONS = {
+    "items": {"class_id": "INTEGER", "subclass_id": "INTEGER", "required_level": "INTEGER"},
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, cols in MIGRATIONS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, typ in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_items_class ON items(class_id, subclass_id)")
+    conn.commit()
+
+
 def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
     if readonly:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
     else:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(path, timeout=30)
-        conn.executescript(SCHEMA)
+        conn.executescript(SCHEMA.replace(
+            "CREATE INDEX IF NOT EXISTS ix_items_name ON items(name_lc);", ""))
+        _migrate(conn)
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_items_name ON items(name_lc)")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=30000")
     return conn

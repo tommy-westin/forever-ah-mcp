@@ -229,12 +229,13 @@ async def resolve_houses(client: BlizzardClient, conn: sqlite3.Connection, s: Se
 
 
 async def fetch_item_names(client: BlizzardClient, conn: sqlite3.Connection, limit: int) -> int:
+    # Saknar namn, eller hämtades innan kategori-id sparades (class_id NULL)
     missing = [
         r[0]
         for r in conn.execute(
             """SELECT DISTINCT l.item_id FROM listings l
                LEFT JOIN items i ON i.item_id = l.item_id
-               WHERE i.item_id IS NULL OR (i.name IS NULL AND i.fetch_failed < 3)
+               WHERE i.item_id IS NULL OR (i.class_id IS NULL AND i.fetch_failed < 3)
                LIMIT ?""",
             (limit,),
         )
@@ -257,11 +258,16 @@ async def fetch_item_names(client: BlizzardClient, conn: sqlite3.Connection, lim
         for item_id, d in results:
             if d:
                 name = d.get("name")
+                cls = d.get("item_class") or {}
+                sub = d.get("item_subclass") or {}
                 conn.execute(
-                    "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,0)",
+                    """INSERT OR REPLACE INTO items
+                       (item_id,name,name_lc,quality,item_class,item_subclass,item_level,vendor_sell,fetched_at,
+                        fetch_failed,class_id,subclass_id,required_level)
+                       VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?)""",
                     (item_id, name, (name or "").lower(), (d.get("quality") or {}).get("type"),
-                     (d.get("item_class") or {}).get("name"), (d.get("item_subclass") or {}).get("name"),
-                     d.get("level"), d.get("sell_price"), now),
+                     cls.get("name"), sub.get("name"), d.get("level"), d.get("sell_price"), now,
+                     cls.get("id"), sub.get("id"), d.get("required_level") or 0),
                 )
             else:
                 conn.execute(

@@ -16,7 +16,7 @@ Battle.net API ──(varje timme)──> collector ──> SQLite (/data/ah.sql
 | `snapshots` | Per item och timme: lägsta pris, 10:e percentil, median (kvantitetsviktade), mängd ute, antal auktioner, största listningens andel, uppskattat sålt |
 | `daily` | Dagsaggregat per UTC-dygn, sparas för alltid |
 | `listings` | Alla auktioner från senaste hämtningen, används för orderbok och säljuppskattning |
-| `items` | Namn, kvalitet, klass och vendorpris från static-API:t, hämtas när ett item först syns |
+| `items` | Namn, kvalitet, klass och subklass (namn och id), itemnivå, nivåkrav och vendorpris från static-API:t |
 | `runs`, `houses` | Senaste `Last-Modified` per hus och endpoint, husindex |
 
 Priser lagras i koppar per styck. Auktioner med bara bud (utan buyout) ignoreras.
@@ -31,7 +31,9 @@ Priser lagras i koppar per styck. Auktioner med bara bud (utan buyout) ignoreras
 | `ah_history(item, days, house?)` | Tidsserie, per timme upp till 14 dygn, därefter per dygn |
 | `ah_signals(item, house?)` | Bottentecken 0–3: priset har slutat falla, mängden minskar, försäljningen ökar |
 | `ah_depth(item, house?)` | Orderbok: mängd per prisband, billigaste listningar, kostnad att köpa billigaste 25 % |
-| `ah_movers(hours, min_daily_turnover_gold, house?)` | Största prisrörelserna bland items med omsättning |
+| `ah_movers(hours, min_daily_turnover_gold, item_class?, item_subclass?, house?)` | Största prisrörelserna bland items med omsättning, valfritt per kategori |
+| `ah_categories(house?)` | Alla kategorier (Blizzards klass och subklass) som finns ute, med antal items |
+| `ah_category(item_class?, item_subclass?, min_item_level?, max_item_level?, limit, house?)` | Items i en kategori sorterade på uppskattad omsättning senaste dygnet |
 | `ah_search_items(text)` | Hitta item-id på namn |
 | `ah_status()` | Senaste data per hus och hur långt bak historiken går |
 
@@ -128,7 +130,7 @@ AH_DB_PATH=./ah.sqlite forever-ah-mcp
 | `AH_RULESET_ID` | första | Alla rulesets i en region delar samma hus |
 | `AH_POLL_MINUTES` | `20` | Hur ofta API:t frågas; oförändrad data ger 304 och kostar inget |
 | `AH_HOURLY_RETENTION_DAYS` | `14` | Därefter finns bara dagsaggregat |
-| `AH_ITEM_FETCH_PER_RUN` | `300` | Max antal nya itemnamn per körning |
+| `AH_ITEM_FETCH_PER_RUN` | `1000` | Max antal nya itemnamn per körning |
 | `MCP_TOKEN` | tom | Kräver `Authorization: Bearer`; tom betyder öppen port |
 
 ## Drift

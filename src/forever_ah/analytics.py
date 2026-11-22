@@ -119,6 +119,18 @@ def _sold_between(conn, house_id, item_id, t0, t1) -> int:
 # --- Verktyg ---
 
 
+def item_info(conn: sqlite3.Connection, item_id: int) -> dict[str, Any]:
+    r = conn.execute(
+        "SELECT item_class, item_subclass, quality, item_level, required_level, vendor_sell FROM items WHERE item_id=?",
+        (item_id,),
+    ).fetchone()
+    if not r:
+        return {}
+    return {"category": " / ".join(x for x in (r["item_class"], r["item_subclass"]) if x) or None,
+            "quality": r["quality"], "item_level": r["item_level"], "required_level": r["required_level"],
+            "vendor_sell": fmt(r["vendor_sell"]) if r["vendor_sell"] else None}
+
+
 def price(conn: sqlite3.Connection, house_id: int, item_id: int) -> dict[str, Any]:
     now = _latest_ts(conn, house_id)
     cur = _snapshot_at_or_before(conn, house_id, item_id, now)
@@ -129,6 +141,7 @@ def price(conn: sqlite3.Connection, house_id: int, item_id: int) -> dict[str, An
     d7 = _daily_at_or_before(conn, house_id, item_id, week_day)
     sold24 = _sold_between(conn, house_id, item_id, cur["ts"] - DAY, cur["ts"])
     return {
+        **item_info(conn, item_id),
         "data_from": _iso(cur["ts"]),
         "stale_hours": round((now - cur["ts"]) / 3600, 1),
         "min_price": fmt(cur["min_price"]),
@@ -263,8 +276,20 @@ def depth(conn: sqlite3.Connection, house_id: int, item_id: int, top: int = 10) 
     }
 
 
+def _category_match(item_class: str | None, item_subclass: str | None):
+    """SQL-villkor mot items-tabellen (alias i) för klass/subklass, skiftlägesokänsligt delsträng."""
+    where, args = [], []
+    if item_class:
+        where.append("lower(i.item_class) LIKE ?")
+        args.append(f"%{item_class.strip().lower()}%")
+    if item_subclass:
+        where.append("lower(i.item_subclass) LIKE ?")
+        args.append(f"%{item_subclass.strip().lower()}%")
+    return where, args
+
+
 def movers(conn: sqlite3.Connection, house_id: int, hours: int = 24, min_daily_turnover_copper: int = 50000,
-           limit: int = 15) -> dict[str, Any]:
+           limit: int = 15, item_class: str | None = None, item_subclass: str | None = None) -> dict[str, Any]:
     now = _latest_ts(conn, house_id)
     then = now - hours * 3600
     rows = conn.execute(
@@ -279,7 +304,7 @@ def movers(conn: sqlite3.Connection, house_id: int, hours: int = 24, min_daily_t
               ON m.item_id=s.item_id AND m.ts=s.ts WHERE s.house_id=:h),
         sold AS (
             SELECT item_id, sum(est_sold) n FROM snapshots WHERE house_id=:h AND ts>:then AND ts<=:now GROUP BY item_id)
-        SELECT cur.item_id, i.name, cur.min_price AS now_p, old.min_price AS old_p, cur.qty AS now_q, old.qty AS old_q,
+        SELECT cur.item_id, i.name, i.item_class, i.item_subclass, cur.min_price AS now_p, old.min_price AS old_p, cur.qty AS now_q, old.qty AS old_q,
                coalesce(sold.n,0) AS sold
         FROM cur JOIN old ON old.item_id=cur.item_id
         LEFT JOIN sold ON sold.item_id=cur.item_id
@@ -289,17 +314,82 @@ def movers(conn: sqlite3.Connection, house_id: int, hours: int = 24, min_daily_t
     ).fetchall()
     scale = 24 / hours
     cand = []
+    cls_l = item_class.strip().lower() if item_class else None
+    sub_l = item_subclass.strip().lower() if item_subclass else None
     for r in rows:
+        if cls_l and cls_l not in (r["item_class"] or "").lower():
+            continue
+        if sub_l and sub_l not in (r["item_subclass"] or "").lower():
+            continue
         turnover = r["sold"] * r["now_p"] * scale
         if turnover < min_daily_turnover_copper or not r["old_p"]:
             continue
         cand.append({
-            "item_id": r["item_id"], "name": r["name"], "now": fmt(r["now_p"]), "before": fmt(r["old_p"]),
+            "item_id": r["item_id"], "name": r["name"],
+            "category": " / ".join(x for x in (r["item_class"], r["item_subclass"]) if x) or None,
+            "now": fmt(r["now_p"]), "before": fmt(r["old_p"]),
             "change_pct": _pct(r["now_p"], r["old_p"]), "qty_change_pct": _pct(r["now_q"], r["old_q"]),
             "est_sold": r["sold"], "est_daily_turnover": fmt(turnover),
         })
     cand.sort(key=lambda x: x["change_pct"])
     return {"window_hours": hours, "up": list(reversed(cand[-limit:])), "down": cand[:limit]}
+
+
+def categories(conn: sqlite3.Connection, house_id: int) -> dict[str, Any]:
+    rows = conn.execute(
+        """SELECT i.item_class, i.item_subclass, count(DISTINCT l.item_id) AS items, sum(l.qty) AS qty
+           FROM listings l JOIN items i ON i.item_id=l.item_id
+           WHERE l.house_id=? AND i.item_class IS NOT NULL
+           GROUP BY 1,2 ORDER BY 1, 3 DESC""",
+        (house_id,),
+    ).fetchall()
+    missing = conn.execute(
+        """SELECT count(DISTINCT l.item_id) FROM listings l LEFT JOIN items i ON i.item_id=l.item_id
+           WHERE l.house_id=? AND i.item_class IS NULL""", (house_id,)).fetchone()[0]
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        out.setdefault(r["item_class"], []).append(
+            {"subclass": r["item_subclass"], "items_listed": r["items"], "qty": r["qty"]})
+    return {"categories": out, "items_without_category": missing}
+
+
+def category_items(conn: sqlite3.Connection, house_id: int, item_class: str | None, item_subclass: str | None,
+                   min_level: int | None = None, max_level: int | None = None, limit: int = 30) -> dict[str, Any]:
+    """Items i en kategori sorterade på uppskattad omsättning senaste dygnet."""
+    now = _latest_ts(conn, house_id)
+    where, args = _category_match(item_class, item_subclass)
+    if min_level is not None:
+        where.append("coalesce(i.item_level,0) >= ?")
+        args.append(min_level)
+    if max_level is not None:
+        where.append("coalesce(i.item_level,0) <= ?")
+        args.append(max_level)
+    if not where:
+        raise NotFound("Ange item_class och/eller item_subclass. Se ah_categories för giltiga värden.")
+    rows = conn.execute(
+        f"""
+        WITH cur AS (
+            SELECT s.item_id, s.min_price, s.median_price, s.qty, s.listings FROM snapshots s
+            JOIN (SELECT item_id, max(ts) ts FROM snapshots WHERE house_id=? AND qty>0 GROUP BY item_id) m
+              ON m.item_id=s.item_id AND m.ts=s.ts WHERE s.house_id=?),
+        sold AS (SELECT item_id, sum(est_sold) n FROM snapshots WHERE house_id=? AND ts>? GROUP BY item_id)
+        SELECT i.item_id, i.name, i.item_class, i.item_subclass, i.item_level, i.quality,
+               cur.min_price, cur.median_price, cur.qty, cur.listings, coalesce(sold.n,0) AS sold
+        FROM items i JOIN cur ON cur.item_id=i.item_id LEFT JOIN sold ON sold.item_id=i.item_id
+        WHERE {' AND '.join(where)}
+        """,
+        (house_id, house_id, house_id, now - DAY, *args),
+    ).fetchall()
+    items = [{
+        "item_id": r["item_id"], "name": r["name"], "subclass": r["item_subclass"], "item_level": r["item_level"],
+        "quality": r["quality"], "min_price": fmt(r["min_price"]), "median_price": fmt(r["median_price"]),
+        "qty": r["qty"], "listings": r["listings"], "est_sold_24h": r["sold"],
+        "est_turnover_24h": fmt(r["sold"] * r["min_price"]), "_t": r["sold"] * r["min_price"],
+    } for r in rows]
+    items.sort(key=lambda x: -x["_t"])
+    for x in items:
+        x.pop("_t")
+    return {"matches": len(items), "items": items[:limit]}
 
 
 def status(conn: sqlite3.Connection) -> dict[str, Any]:
