@@ -172,17 +172,24 @@ def ah_status() -> dict[str, Any]:
 
 
 class BearerAuth:
-    """Enkel ASGI-middleware: kräver 'Authorization: Bearer <MCP_TOKEN>' när token är satt."""
+    """ASGI-middleware: kräver 'Authorization: Bearer <token>' där token är en av de konfigurerade.
 
-    def __init__(self, app, token: str):
+    MCP_TOKEN kan innehålla flera kommaseparerade tokens, t.ex. en per person, så att en kan spärras
+    utan att de andra påverkas.
+    """
+
+    def __init__(self, app, tokens: list[str]):
         self.app = app
-        self.token = token.encode()
+        self.expected = [b"Bearer " + t.encode() for t in tokens]
+
+    def _ok(self, got: bytes) -> bool:
+        # Jämför mot alla utan att avbryta tidigt, för konstant tid
+        return any([hmac.compare_digest(got, e) for e in self.expected])
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             headers = dict(scope.get("headers") or [])
-            got = headers.get(b"authorization", b"")
-            if not hmac.compare_digest(got, b"Bearer " + self.token):
+            if not self._ok(headers.get(b"authorization", b"")):
                 await send({"type": "http.response.start", "status": 401,
                             "headers": [(b"content-type", b"text/plain"), (b"www-authenticate", b"Bearer")]})
                 await send({"type": "http.response.body", "body": b"Unauthorized"})
@@ -201,8 +208,10 @@ def main() -> None:
     import uvicorn
 
     app = mcp.streamable_http_app()
-    if S.mcp_token:
-        app = BearerAuth(app, S.mcp_token)
+    tokens = [t.strip() for t in S.mcp_token.split(",") if t.strip()]
+    if tokens:
+        app = BearerAuth(app, tokens)
+        log.info("Bearer-autentisering aktiv med %d token(s)", len(tokens))
     else:
         log.warning("MCP_TOKEN är inte satt: HTTP-servern är öppen för alla som når porten.")
     uvicorn.run(app, host=S.mcp_host, port=S.mcp_port, log_level="info")

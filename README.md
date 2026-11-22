@@ -113,6 +113,12 @@ claude mcp add --transport http forever-ah http://PROXMOX-IP:8765/mcp \
 ```
 `--allow-http` behövs eftersom `mcp-remote` annars kräver HTTPS för andra adresser än localhost. Avsluta Claude Desktop helt via systemfältet efter ändringen.
 
+**Dela med någon utanför ditt nät** via Cloudflare Tunnel: lägg till en publik hostname (t.ex. `ah.example.com`) som pekar på `http://IP:8765`, ge personen en egen token i `MCP_TOKEN` och låt hen köra:
+```bash
+claude mcp add -s user --transport http forever-ah https://ah.example.com/mcp --header "Authorization: Bearer HENS_TOKEN"
+```
+Spärra genom att ta bort token ur `MCP_TOKEN` och starta om `forever-ah-mcp`.
+
 **claude.ai i webbläsaren** kräver en publik HTTPS-adress och stöder inte statiska bearer-tokens. Det kräver en reverse proxy med OAuth och ingår inte här.
 
 **Lokalt via stdio** (utan Docker), om databasen finns på samma maskin:
@@ -132,7 +138,7 @@ AH_DB_PATH=./ah.sqlite forever-ah-mcp
 | `AH_POLL_MINUTES` | `20` | Hur ofta API:t frågas; oförändrad data ger 304 och kostar inget |
 | `AH_HOURLY_RETENTION_DAYS` | `14` | Därefter finns bara dagsaggregat |
 | `AH_ITEM_FETCH_PER_RUN` | `1000` | Max antal nya itemnamn per körning |
-| `MCP_TOKEN` | tom | Kräver `Authorization: Bearer`; tom betyder öppen port |
+| `MCP_TOKEN` | tom | Kräver `Authorization: Bearer`. Flera tokens kommaseparerade, en per användare. Tom betyder öppen port |
 
 ## Drift
 

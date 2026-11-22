@@ -350,3 +350,24 @@ def test_level_activity(tmp_path):
     assert bands["41-50"]["change_pp"] > 0 > bands["11-20"]["change_pp"]
     ctx = a.band_context(cn, 1, 2)
     assert ctx["band"] == "41-50" and ctx["growing"] == "ja"
+
+
+def test_bearer_auth_multiple_tokens():
+    from forever_ah.server import BearerAuth
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    auth = BearerAuth(app, ["mitt", "brorsan"])
+
+    async def call(header):
+        sent = []
+        scope = {"type": "http", "headers": [(b"authorization", header)] if header else []}
+        await auth(scope, None, lambda m: sent.append(m) or asyncio.sleep(0))
+        return sent[0]["status"]
+
+    assert asyncio.run(call(b"Bearer mitt")) == 200
+    assert asyncio.run(call(b"Bearer brorsan")) == 200
+    assert asyncio.run(call(b"Bearer fel")) == 401
+    assert asyncio.run(call(None)) == 401
