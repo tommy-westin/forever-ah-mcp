@@ -226,6 +226,7 @@ def signals(conn: sqlite3.Connection, house_id: int, item_id: int) -> dict[str, 
     met = sum(1 for c in checks.values() if c["met"] == "ja")
     known = sum(1 for c in checks.values() if c["met"] != "okänt")
     return {
+        "level_band": band_context(conn, house_id, item_id),
         "score": f"{met}/3",
         "evaluated": known,
         "days_of_history": days_of_data,
@@ -391,6 +392,98 @@ def category_items(conn: sqlite3.Connection, house_id: int, item_class: str | No
     for x in items:
         x.pop("_t")
     return {"matches": len(items), "items": items[:limit]}
+
+
+def _band(level: int | None, size: int) -> str | None:
+    if not level or level <= 0:
+        return None
+    lo = ((min(level, 60) - 1) // size) * size + 1
+    return f"{lo}-{min(lo + size - 1, 60)}"
+
+
+def _band_turnover(conn: sqlite3.Connection, house_id: int, start_day: str, band_size: int,
+                   item_class: str | None, item_subclass: str | None) -> list[sqlite3.Row]:
+    where, args = _category_match(item_class, item_subclass)
+    extra = (" AND " + " AND ".join(where)) if where else ""
+    return conn.execute(
+        f"""SELECT d.day, i.item_level AS lvl, sum(d.est_sold) AS sold,
+                   sum(d.est_sold * d.min_price) AS turnover, count(DISTINCT CASE WHEN d.est_sold>0 THEN d.item_id END) AS items
+            FROM daily d JOIN items i ON i.item_id=d.item_id
+            WHERE d.house_id=? AND d.day>=? AND i.item_level>0 AND d.min_price>0{extra}
+            GROUP BY d.day, i.item_level""",
+        (house_id, start_day, *args),
+    ).fetchall()
+
+
+def level_activity(conn: sqlite3.Connection, house_id: int, days: int = 7, band_size: int = 10,
+                   item_class: str | None = None, item_subclass: str | None = None) -> dict[str, Any]:
+    """Uppskattad omsättning och såld mängd per nivåband (itemnivå) och dag."""
+    days = max(2, min(days, 90))
+    band_size = band_size if band_size in (5, 10, 15, 20) else 10
+    now = _latest_ts(conn, house_id)
+    today = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%d")
+    start = datetime.fromtimestamp(now - (days - 1) * DAY, tz=timezone.utc).strftime("%Y-%m-%d")
+    rows = _band_turnover(conn, house_id, start, band_size, item_class, item_subclass)
+    grid: dict[str, dict[str, dict[str, int]]] = {}
+    for r in rows:
+        b = _band(r["lvl"], band_size)
+        if not b:
+            continue
+        cell = grid.setdefault(r["day"], {}).setdefault(b, {"sold": 0, "turnover": 0, "items": 0})
+        cell["sold"] += r["sold"] or 0
+        cell["turnover"] += r["turnover"] or 0
+        cell["items"] += r["items"] or 0
+    out_days = []
+    for day in sorted(grid):
+        total = sum(c["turnover"] for c in grid[day].values()) or 1
+        out_days.append({
+            "day": day, "partial": day == today,
+            "bands": [{"band": b, "est_sold": c["sold"], "est_turnover": fmt(c["turnover"]),
+                       "turnover_share": round(c["turnover"] / total, 3), "items_sold": c["items"]}
+                      for b, c in sorted(grid[day].items(), key=lambda kv: int(kv[0].split("-")[0]))],
+        })
+    # Trend: andel av omsättningen, senaste hela dygnet mot första dygnet i perioden
+    full = [d for d in out_days if not d["partial"]]
+    trend = []
+    if len(full) >= 2:
+        first = {b["band"]: b["turnover_share"] for b in full[0]["bands"]}
+        last = {b["band"]: b["turnover_share"] for b in full[-1]["bands"]}
+        for b in sorted(set(first) | set(last), key=lambda x: int(x.split("-")[0])):
+            trend.append({"band": b, "share_first": first.get(b, 0.0), "share_last": last.get(b, 0.0),
+                          "change_pp": round((last.get(b, 0.0) - first.get(b, 0.0)) * 100, 1)})
+    return {
+        "band_by": "item_level", "band_size": band_size,
+        "filter": {"item_class": item_class, "item_subclass": item_subclass},
+        "trend_first_vs_last_full_day": trend or None,
+        "days": out_days,
+        "note": "Omsättning = uppskattad såld mängd x dagens lägsta pris. Itemnivå följer ungefär spelarnivå för "
+                "utrustning och yrkesnivå för material. Dagens dygn är ofullständigt (partial).",
+    }
+
+
+def band_context(conn: sqlite3.Connection, house_id: int, item_id: int, band_size: int = 10) -> dict[str, Any] | None:
+    """Hur itemets nivåband (samma klass) utvecklas: andel av klassens omsättning, senaste 2 dygn mot 2 dygn innan."""
+    it = conn.execute("SELECT item_level, item_class FROM items WHERE item_id=?", (item_id,)).fetchone()
+    if not it or not it["item_level"]:
+        return None
+    band = _band(it["item_level"], band_size)
+    now = _latest_ts(conn, house_id)
+    days = [datetime.fromtimestamp(now - k * DAY, tz=timezone.utc).strftime("%Y-%m-%d") for k in range(1, 5)]
+    rows = _band_turnover(conn, house_id, days[-1], band_size, it["item_class"], None)
+    share: dict[str, float] = {}
+    for day in days:
+        tot = sum(r["turnover"] or 0 for r in rows if r["day"] == day)
+        mine = sum(r["turnover"] or 0 for r in rows if r["day"] == day and _band(r["lvl"], band_size) == band)
+        share[day] = mine / tot if tot else 0.0
+    recent = (share[days[0]] + share[days[1]]) / 2
+    before = (share[days[2]] + share[days[3]]) / 2
+    if not before:
+        return {"band": band, "item_class": it["item_class"], "growing": "okänt",
+                "note": "För lite historik (kräver fyra hela dygn)."}
+    return {"band": band, "item_class": it["item_class"],
+            "share_recent_2d": round(recent, 3), "share_prior_2d": round(before, 3),
+            "growing": "ja" if recent >= 1.1 * before else ("nej" if recent <= 0.9 * before else "oförändrat"),
+            "rule": "nivåbandets andel av klassens omsättning, senaste 2 hela dygn mot de 2 dygnen innan"}
 
 
 def status(conn: sqlite3.Connection) -> dict[str, Any]:

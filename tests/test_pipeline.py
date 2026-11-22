@@ -330,3 +330,23 @@ def test_fallback_for_404_items(tmp_path):
     assert c.apply_fallback(cn) == 1
     r = cn.execute("SELECT name, item_class, class_id, source FROM items WHERE item_id=647").fetchone()
     assert tuple(r) == ("Destiny", "Weapon", 2, "classic")
+
+
+def test_level_activity(tmp_path):
+    cn = db.connect(str(tmp_path / "l.sqlite"))
+    with cn:
+        cn.execute("INSERT INTO houses VALUES (1,'Horde','horde')")
+        cn.executemany("INSERT INTO items(item_id,name,name_lc,item_class,item_subclass,item_level,fetch_failed) "
+                       "VALUES (?,?,?,?,?,?,0)",
+                       [(1, "Low", "low", "Trade Goods", "Herb", 15, ), (2, "High", "high", "Trade Goods", "Herb", 45)])
+        # Fem hela dygn: lågnivå konstant, högnivå växer
+        for d in range(5):
+            day = a.datetime.fromtimestamp(T0 + d * DAY, tz=a.timezone.utc).strftime("%Y-%m-%d")
+            cn.execute("INSERT INTO daily VALUES (1,1,?,100,100,100,10,1,100,24)", (day,))
+            cn.execute("INSERT INTO daily VALUES (1,2,?,100,100,100,10,1,?,24)", (day, 20 + 40 * d))
+        cn.execute("INSERT INTO snapshots VALUES (1,2,?,100,100,100,10,1,1.0,0)", (T0 + 5 * DAY + 3600,))
+    res = a.level_activity(cn, 1, days=7, item_subclass="herb")
+    bands = {t["band"]: t for t in res["trend_first_vs_last_full_day"]}
+    assert bands["41-50"]["change_pp"] > 0 > bands["11-20"]["change_pp"]
+    ctx = a.band_context(cn, 1, 2)
+    assert ctx["band"] == "41-50" and ctx["growing"] == "ja"

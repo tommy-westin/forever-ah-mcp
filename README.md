@@ -29,7 +29,8 @@ Priser lagras i koppar per styck. Auktioner med bara bud (utan buyout) ignoreras
 |---|---|
 | `ah_price(item, house?)` | Pris nu, förändring 24 h och 7 dygn, mängd ute, uppskattat sålt senaste dygnet |
 | `ah_history(item, days, house?)` | Tidsserie, per timme upp till 14 dygn, därefter per dygn |
-| `ah_signals(item, house?)` | Bottentecken 0–3: priset har slutat falla, mängden minskar, försäljningen ökar |
+| `ah_signals(item, house?)` | Bottentecken 0–3: priset har slutat falla, mängden minskar, försäljningen ökar. Visar även om itemets nivåband växer (`level_band`) |
+| `ah_level_activity(days, band_size, item_class?, item_subclass?, house?)` | Uppskattad omsättning per nivåband (itemnivå) och dag, med trend. Visar var nivåvågen befinner sig på din server |
 | `ah_depth(item, house?)` | Orderbok: mängd per prisband, billigaste listningar, kostnad att köpa billigaste 25 % |
 | `ah_movers(hours, min_daily_turnover_gold, item_class?, item_subclass?, house?)` | Största prisrörelserna bland items med omsättning, valfritt per kategori |
 | `ah_categories(house?)` | Alla kategorier (Blizzards klass och subklass) som finns ute, med antal items |

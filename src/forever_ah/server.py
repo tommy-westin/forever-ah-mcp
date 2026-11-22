@@ -93,7 +93,7 @@ def ah_history(item: str, days: int = 7, house: str | None = None) -> dict[str, 
 @_safe
 def ah_signals(item: str, house: str | None = None) -> dict[str, Any]:
     """Bottentecken för ett item som fallit i pris: (1) priset har slutat falla, (2) mängden ute minskar,
-    (3) försäljningen ökar. Ger poäng 0-3 med underlag."""
+    (3) försäljningen ökar. Ger poäng 0-3 med underlag, plus nivåbandets utveckling som kontext (level_band)."""
     with _conn() as c:
         ctx = _ctx(c, item, house)
         return {**ctx, **a.signals(c, ctx["house_id"], ctx["item_id"])}
@@ -141,6 +141,18 @@ def ah_category(item_class: str | None = None, item_subclass: str | None = None,
         ctx = _ctx(c, None, house)
         return {**ctx, **a.category_items(c, ctx["house_id"], item_class, item_subclass, min_item_level,
                                           max_item_level, max(1, min(limit, 200)))}
+
+
+@mcp.tool()
+@_safe
+def ah_level_activity(days: int = 7, band_size: int = 10, item_class: str | None = None,
+                      item_subclass: str | None = None, house: str | None = None) -> dict[str, Any]:
+    """Var på nivåskalan handeln sker: uppskattad omsättning och såld mängd per nivåband (itemnivå) och dag,
+    med trend i omsättningsandel. Filtrera på kategori, t.ex. item_class='Trade Goods' eller item_subclass='Herb',
+    för att se när en nivåvåg når ett visst material."""
+    with _conn() as c:
+        ctx = _ctx(c, None, house)
+        return {**ctx, **a.level_activity(c, ctx["house_id"], days, band_size, item_class, item_subclass)}
 
 
 @mcp.tool()
