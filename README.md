@@ -16,7 +16,7 @@ Battle.net API ──(varje timme)──> collector ──> SQLite (/data/ah.sql
 | `snapshots` | Per item och timme: lägsta pris, 10:e percentil, median (kvantitetsviktade), mängd ute, antal auktioner, största listningens andel, uppskattat sålt |
 | `daily` | Dagsaggregat per UTC-dygn, sparas för alltid |
 | `listings` | Alla auktioner från senaste hämtningen, används för orderbok och säljuppskattning |
-| `items` | Namn, kvalitet, klass och subklass (namn och id), itemnivå, nivåkrav och vendorpris från static-API:t |
+| `items` | Namn, kvalitet, klass och subklass (namn och id), itemnivå, nivåkrav och vendorpris från static-API:t. Forevers item-API svarar 404 på bland annat vanilla-vapen; då används en inbyggd klassisk itemdatabas ([nexus-devs/wow-classic-items](https://github.com/nexus-devs/wow-classic-items), MIT) och `source` blir `classic` |
 | `runs`, `houses` | Senaste `Last-Modified` per hus och endpoint, husindex |
 
 Priser lagras i koppar per styck. Auktioner med bara bud (utan buyout) ignoreras.

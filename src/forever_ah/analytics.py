@@ -121,14 +121,15 @@ def _sold_between(conn, house_id, item_id, t0, t1) -> int:
 
 def item_info(conn: sqlite3.Connection, item_id: int) -> dict[str, Any]:
     r = conn.execute(
-        "SELECT item_class, item_subclass, quality, item_level, required_level, vendor_sell FROM items WHERE item_id=?",
+        "SELECT item_class, item_subclass, quality, item_level, required_level, vendor_sell, source FROM items WHERE item_id=?",
         (item_id,),
     ).fetchone()
     if not r:
         return {}
     return {"category": " / ".join(x for x in (r["item_class"], r["item_subclass"]) if x) or None,
             "quality": r["quality"], "item_level": r["item_level"], "required_level": r["required_level"],
-            "vendor_sell": fmt(r["vendor_sell"]) if r["vendor_sell"] else None}
+            "vendor_sell": fmt(r["vendor_sell"]) if r["vendor_sell"] else None,
+            "item_data_source": r["source"]}
 
 
 def price(conn: sqlite3.Connection, house_id: int, item_id: int) -> dict[str, Any]:

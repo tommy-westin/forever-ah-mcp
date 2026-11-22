@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from . import db
+from . import db, fallback
 from .blizzard import BlizzardClient, BlizzardError
 from .config import Settings, load_settings
 
@@ -228,6 +228,21 @@ async def resolve_houses(client: BlizzardClient, conn: sqlite3.Connection, s: Se
     return ruleset_id, [i for i, _ in chosen]
 
 
+ITEM_COLS = ("(item_id,name,name_lc,quality,item_class,item_subclass,item_level,vendor_sell,fetched_at,"
+             "fetch_failed,class_id,subclass_id,required_level,source)")
+
+
+def apply_fallback(conn: sqlite3.Connection) -> int:
+    """Fyller i items som API:t saknar (namn saknas) från reservkällan. Billigt, körs varje varv."""
+    now = int(time.time())
+    rows = [r for r in (fallback.as_row(i, now) for (i,) in
+                        conn.execute("SELECT item_id FROM items WHERE name IS NULL").fetchall()) if r]
+    if rows:
+        with conn:
+            conn.executemany(f"INSERT OR REPLACE INTO items {ITEM_COLS} VALUES ({','.join('?' * 14)})", rows)
+    return len(rows)
+
+
 async def fetch_item_names(client: BlizzardClient, conn: sqlite3.Connection, limit: int) -> int:
     # Saknar namn, eller hämtades innan kategori-id sparades (class_id NULL)
     missing = [
@@ -269,21 +284,26 @@ async def fetch_item_names(client: BlizzardClient, conn: sqlite3.Connection, lim
                 conn.execute(
                     """INSERT OR REPLACE INTO items
                        (item_id,name,name_lc,quality,item_class,item_subclass,item_level,vendor_sell,fetched_at,
-                        fetch_failed,class_id,subclass_id,required_level)
-                       VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?)""",
+                        fetch_failed,class_id,subclass_id,required_level,source)
+                       VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,'api')""",
                     (item_id, name, (name or "").lower(), (d.get("quality") or {}).get("type"),
                      cls.get("name"), sub.get("name"), d.get("level"), d.get("sell_price"), now,
                      cls.get("id"), sub.get("id"), d.get("required_level") or 0),
                 )
             else:
                 notfound += 1
+                row = fallback.as_row(item_id, now)
+                if row:
+                    conn.execute(f"INSERT OR REPLACE INTO items {ITEM_COLS} VALUES ({','.join('?' * len(row))})", row)
+                    continue
                 conn.execute(
                     """INSERT INTO items(item_id, fetched_at, fetch_failed) VALUES (?,?,1)
                        ON CONFLICT(item_id) DO UPDATE SET fetch_failed = fetch_failed + 1, fetched_at = excluded.fetched_at""",
                     (item_id, now),
                 )
     if notfound or transient:
-        log.info("Itemdata: %d hämtade, %d finns inte i API:t (404), %d tillfälliga fel", ok, notfound, transient)
+        log.info("Itemdata: %d från API, %d saknas i API:t (404, reservkälla används om möjligt), %d tillfälliga fel",
+                 ok, notfound, transient)
     return ok
 
 
@@ -313,6 +333,9 @@ async def collect_once(client: BlizzardClient, conn: sqlite3.Connection, s: Sett
             log.info("Hus %s/%s: %d listningar, %d items, data från %s", house_id, kind, len(listings), n,
                      datetime.fromtimestamp(data_ts, tz=timezone.utc).isoformat())
     rollup(conn, s.hourly_retention_days)
+    filled = apply_fallback(conn)
+    if filled:
+        log.info("Itemdata från reservkällan för %d items", filled)
     named = await fetch_item_names(client, conn, s.item_fetch_per_run)
     if named:
         log.info("Hämtade namn för %d items", named)

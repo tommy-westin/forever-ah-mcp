@@ -318,3 +318,15 @@ def test_item_fetch_transient_vs_notfound(tmp_path):
     assert asyncio.run(go()) == 1
     rows = dict(cn.execute("SELECT item_id, fetch_failed FROM items").fetchall())
     assert rows == {2: 1, 3: 0}  # 429 lämnas orört och försöks igen nästa körning
+
+
+def test_fallback_for_404_items(tmp_path):
+    from forever_ah import fallback
+    assert fallback.lookup(809)["name"] == "Bloodrazor"
+    cn = db.connect(str(tmp_path / "f.sqlite"))
+    with cn:
+        cn.execute("INSERT INTO items(item_id, fetched_at, fetch_failed) VALUES (647, 0, 3)")
+        cn.execute("INSERT INTO items(item_id, fetched_at, fetch_failed) VALUES (999999999, 0, 3)")
+    assert c.apply_fallback(cn) == 1
+    r = cn.execute("SELECT name, item_class, class_id, source FROM items WHERE item_id=647").fetchone()
+    assert tuple(r) == ("Destiny", "Weapon", 2, "classic")

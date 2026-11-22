@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS items (
     class_id      INTEGER,
     subclass_id   INTEGER,
     required_level INTEGER,
+    source        TEXT,                   -- 'api' eller 'classic' (reservkälla)
     vendor_sell   INTEGER,
     fetched_at    INTEGER,
     fetch_failed  INTEGER NOT NULL DEFAULT 0
@@ -89,7 +90,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 
 MIGRATIONS = {
-    "items": {"class_id": "INTEGER", "subclass_id": "INTEGER", "required_level": "INTEGER"},
+    "items": {"class_id": "INTEGER", "subclass_id": "INTEGER", "required_level": "INTEGER", "source": "TEXT"},
 }
 
 
